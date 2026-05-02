@@ -11,14 +11,25 @@
             margin: 0;
             padding: 0;
             overflow: hidden;
-            background-color: #00020a;
+            background-color: #000; /* ゲーム画面外の余白は黒で統一 */
             font-family: 'DotGothic16', sans-serif;
             touch-action: none;
             user-select: none;
             -webkit-user-select: none;
+            /* スワイプバックなどのブラウザ操作を無効化 */
+            overscroll-behavior: none; 
+            /* キャンバスを常に画面中央に配置 */
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+            width: 100vw;
         }
         #gameCanvas {
             display: block;
+            background-color: #00020a;
+            /* 画面との境界線を少し光らせてアーケード感を演出 */
+            box-shadow: 0 0 30px rgba(0, 255, 255, 0.15);
         }
     </style>
 </head>
@@ -118,9 +129,10 @@
         let nebulas = [];
 
         const keys = {};
-        const baseW = 800;
-        const baseH = 600;
-        let scale = 1;
+        const baseW = 800; // ゲームの論理的な幅
+        const baseH = 600; // ゲームの論理的な高さ
+        let scale = 1;     // 表示スケール
+        let dpr = 1;       // デバイスピクセル比（Retina対応）
 
         // --- オーディオ管理 ---
         const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
@@ -285,7 +297,6 @@
         }
         initBackground();
 
-        // 物理ベースのパーティクル生成
         function createExplosion(x, y, color, count = 20) {
             for (let i = 0; i < count; i++) {
                 const angle = Math.random() * Math.PI * 2;
@@ -302,21 +313,37 @@
             }
         }
 
+        // 高解像度（Retina等）およびレスポンシブ対応のリサイズ処理
         function resize() {
-            const sw = window.innerWidth, sh = window.innerHeight;
+            const sw = window.innerWidth;
+            const sh = window.innerHeight;
+            
+            // 画面の縦横比に合わせて、論理サイズ(800x600)が収まる最大スケールを計算
             scale = Math.min(sw / baseW, sh / baseH);
-            canvas.width = baseW * scale;
-            canvas.height = baseH * scale;
+            
+            // iPadなどの高解像度ディスプレイ向けにデバイスピクセル比を取得
+            dpr = window.devicePixelRatio || 1;
+            
+            // キャンバスの「CSS上の表示サイズ」を設定
+            canvas.style.width = `${baseW * scale}px`;
+            canvas.style.height = `${baseH * scale}px`;
+            
+            // キャンバスの「実際のピクセル数（解像度）」を設定
+            canvas.width = baseW * scale * dpr;
+            canvas.height = baseH * scale * dpr;
         }
+        
         window.addEventListener('resize', resize);
-        resize();
+        resize(); // 初期化時に実行
 
         function handleInteraction(e) {
             e.preventDefault();
             window.focus();
             if (audioCtx.state === 'suspended') audioCtx.resume();
+            
             const rect = canvas.getBoundingClientRect();
             const touch = e.changedTouches ? e.changedTouches[0] : e;
+            // CSSのスケールを元に、論理座標(800x600)に変換
             const tx = (touch.clientX - rect.left) / scale;
             const ty = (touch.clientY - rect.top) / scale;
 
@@ -338,7 +365,7 @@
             
             if (gameState === 'HOW_TO_PLAY') {
                 const boxY = 40, boxH = baseH - 80;
-                // 調整されたボタンのヒットボックス
+                // レスポンシブにフィットした論理座標での判定
                 if (ty > boxY + boxH - 75 && ty < boxY + boxH - 25 && tx > baseW/2 - 100 && tx < baseW/2 + 100) {
                     gameState = 'MODE_SELECT';
                     playSound(440);
@@ -374,6 +401,7 @@
         canvas.addEventListener('touchmove', (e) => {
             if (gameState !== 'PLAY' || controlMode === 'KEYBOARD' || isWaitingForStageStart) return;
             const rect = canvas.getBoundingClientRect();
+            // ドラッグ中もスケールを考慮して座標を計算
             playerX = (e.touches[0].clientX - rect.left) / scale;
         }, { passive: false });
 
@@ -450,9 +478,8 @@
             const bounce = Math.sin(frameCount * 0.1 + e.phase) * 8;
             ctx.translate(0, bounce);
             
-            // スプリングアニメーションでスケールを更新
-            e.scaleVel += (1 - e.scale) * 0.15; // バネ定数
-            e.scaleVel *= 0.8; // 減衰
+            e.scaleVel += (1 - e.scale) * 0.15;
+            e.scaleVel *= 0.8; 
             e.scale += e.scaleVel;
             
             const pixelSize = 8 * Math.max(0, e.scale);
@@ -492,7 +519,6 @@
             
             if (shakeTimer > 0) ctx.translate((Math.random()-0.5)*15, (Math.random()-0.5)*15);
             
-            // 動的なオーラエフェクト
             const auraTime = frameCount * 0.05;
             const pulseRadius = 220 + Math.sin(auraTime) * 20;
             const auraGrad = ctx.createRadialGradient(0, 0, pulseRadius * 0.4, 0, 0, pulseRadius);
@@ -517,7 +543,7 @@
                 row.forEach((pixel, x) => {
                     if (pixel) {
                         if (isFlashing) {
-                            ctx.fillStyle = "#fff"; // ダメージ時は強烈な白フラッシュ
+                            ctx.fillStyle = "#fff"; 
                             ctx.shadowBlur = 20; ctx.shadowColor = "#fff";
                         } else {
                             ctx.shadowBlur = 0;
@@ -544,7 +570,6 @@
         }
 
         function drawScanlines() {
-            // アーケードモニター風のスキャンラインを描画
             ctx.fillStyle = "rgba(0, 0, 0, 0.15)";
             for(let i=0; i<baseH; i+=4) {
                 ctx.fillRect(0, i, baseW, 2);
@@ -554,10 +579,17 @@
         function update() {
             frameCount++;
             const currentStage = CONFIG.stages[stageIdx % CONFIG.stages.length];
+            
+            // 描画開始前に一度だけ変換行列をリセット
+            ctx.setTransform(1, 0, 0, 1, 0, 0);
+            
             ctx.save();
+            // デバイスピクセル比(Retina等)と表示スケールを合わせた座標系に変換
+            ctx.scale(scale * dpr, scale * dpr);
+            
             const sAmt = isCoreDestroyed && bonusTimer > 280 ? 40 : 15;
             if (shakeTimer > 0) { ctx.translate((Math.random()-0.5)*sAmt, (Math.random()-0.5)*sAmt); shakeTimer--; }
-            ctx.scale(scale, scale);
+            
             ctx.fillStyle = (bonusTimer > 0 && gameState === 'PLAY') ? (isCoreDestroyed ? "#111" : "#001") : currentStage.bgColor; 
             ctx.fillRect(0, 0, baseW, baseH);
 
@@ -570,7 +602,6 @@
                 });
             }
             
-            // 星の描画（軌跡・スピードライン風に強化）
             stars.forEach(s => {
                 const isHyperDrive = (gameState === 'PLAY' && bonusTimer > 0 && !isWaitingForStageStart);
                 const moveMult = (gameState === 'PLAY' && !isWaitingForStageStart) ? (isHyperDrive ? 25 : 1) : 0.1;
@@ -586,7 +617,6 @@
                 
                 ctx.beginPath();
                 ctx.moveTo(s.x, s.y);
-                // 加速時は長い線を描く
                 const trailLength = isHyperDrive ? (s.speed * moveMult * 1.5) : (s.s * 2);
                 ctx.lineTo(s.x, s.y - trailLength);
                 ctx.stroke();
@@ -618,9 +648,8 @@
                 drawOverlay("MISSION FAILED", `SCORE: ${score}`, "RETRY");
             }
 
-            // パーティクル（爆発）の物理ベース更新と描画
             particles.forEach((p, i) => {
-                p.vx *= 0.92; // 摩擦で減速
+                p.vx *= 0.92; 
                 p.vy *= 0.92;
                 p.x += p.vx; 
                 p.y += p.vy; 
@@ -631,7 +660,6 @@
                     const lifeRatio = p.life / p.maxLife;
                     ctx.fillStyle = p.color; 
                     ctx.globalAlpha = lifeRatio; 
-                    // 時間経過で縮小
                     const currentSize = Math.max(0.1, p.size * lifeRatio);
                     ctx.beginPath();
                     ctx.arc(p.x, p.y, currentSize, 0, Math.PI * 2);
@@ -640,7 +668,6 @@
             });
             ctx.globalAlpha = 1.0; 
 
-            // スキャンライン描画でアーケード感を演出
             drawScanlines();
 
             ctx.restore();
@@ -660,7 +687,6 @@
             ctx.fillText(CONFIG.subTitle, baseW/2, 200);
             ctx.shadowBlur = 0;
             
-            // 明滅するテキスト
             ctx.fillStyle = `rgba(0, 255, 255, ${0.7 + Math.sin(frameCount * 0.05) * 0.3})`;
             ctx.font = `bold 20px ${CONFIG.fontMain}`;
             ctx.fillText("操作モードを選択してください", baseW/2, 270);
@@ -694,10 +720,8 @@
 
         function drawHowToPlay() {
             ctx.save();
-            // 枠のサイズと描画
             const boxX = 60, boxY = 40, boxW = baseW - 120, boxH = baseH - 80;
             
-            // 半透明の背景とグリッドパターンでサイバー感を出す
             ctx.fillStyle = "rgba(0, 5, 20, 0.95)";
             ctx.fillRect(boxX, boxY, boxW, boxH);
             
@@ -706,7 +730,6 @@
             for(let i=0; i<boxW; i+=20) { ctx.beginPath(); ctx.moveTo(boxX+i, boxY); ctx.lineTo(boxX+i, boxY+boxH); ctx.stroke(); }
             for(let i=0; i<boxH; i+=20) { ctx.beginPath(); ctx.moveTo(boxX, boxY+i); ctx.lineTo(boxX+boxW, boxY+i); ctx.stroke(); }
 
-            // 外枠を光らせる
             ctx.shadowBlur = 15; ctx.shadowColor = "#0ff";
             ctx.strokeStyle = "#0ff"; ctx.lineWidth = 3;
             ctx.strokeRect(boxX, boxY, boxW, boxH);
@@ -738,12 +761,11 @@
                 ly += 30;
             });
 
-            // BACK ボタン（枠線の下に被らないように位置を微調整）
             ctx.textAlign = "center";
             ctx.fillStyle = "rgba(255, 255, 255, 0.15)";
             ctx.strokeStyle = "#fff";
             ctx.lineWidth = 2;
-            const btnY = boxY + boxH - 75; // 枠の下端(boxY+boxH)より十分に上
+            const btnY = boxY + boxH - 75; 
             ctx.beginPath(); ctx.roundRect(baseW/2 - 100, btnY, 200, 50, 10); ctx.fill(); ctx.stroke();
             ctx.fillStyle = "#fff";
             ctx.font = `bold 18px ${CONFIG.fontMain}`;
@@ -755,14 +777,12 @@
         function updatePlay() {
             if (isWaitingForStageStart) { drawShip(playerX, playerY); return; }
             
-            // プレイヤー座標の更新と慣性の計算
             prevPlayerX = playerX;
             if (controlMode === 'KEYBOARD') {
                 if (keys.ArrowLeft) playerX -= CONFIG.shipSpeed; if (keys.ArrowRight) playerX += CONFIG.shipSpeed;
             }
             if (playerX < 40) playerX = 40; if (playerX > baseW - 40) playerX = baseW - 40;
             
-            // アニメーション用：速度の平滑化
             playerVx = (playerX - prevPlayerX) * 0.4 + playerVx * 0.6;
             
             timeLeft -= 1/60; 
@@ -825,15 +845,13 @@
                 ctx.fillText(problem.text, baseW/2, 85); ctx.restore();
             }
 
-            // 洗練された弾（レーザー）の描画
             bullets.forEach((b, bi) => {
-                b.y -= 30; // 弾速を少しアップして爽快感向上
+                b.y -= 30; 
                 const isBonus = bonusTimer > 0;
                 ctx.shadowBlur = 15; 
                 ctx.shadowColor = isBonus ? "#ffaa00" : "#00ffff";
                 ctx.fillStyle = "#fff";
                 
-                // レーザー風の鋭い形状
                 ctx.beginPath();
                 ctx.moveTo(b.x, b.y - 15);
                 ctx.lineTo(b.x + (isBonus?4:3), b.y);
@@ -850,7 +868,6 @@
                         createExplosion(b.x, b.y - 15, "#ff0", 3); playBonusHitSound();
                         if (coreHP <= 0) { 
                             isCoreDestroyed = true; score += 500; shakeTimer = 40; playDestroySound(); 
-                            // 大爆発を連続パーティクルで表現
                             for(let i=0; i<5; i++) {
                                 setTimeout(() => {
                                     createExplosion(baseW/2 + (Math.random()-0.5)*150, 220 + (Math.random()-0.5)*150, "#fff", 50);
