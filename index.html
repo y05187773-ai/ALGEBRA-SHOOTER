@@ -1,0 +1,920 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>ALGEBRA SHOOTER: KAIJU BUSTERS</title>
+    <!-- ピクセルフォントの読み込み -->
+    <link href="https://fonts.googleapis.com/css2?family=DotGothic16&family=Press+Start+2P&display=swap" rel="stylesheet">
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            overflow: hidden;
+            background-color: #00020a;
+            font-family: 'DotGothic16', sans-serif;
+            touch-action: none;
+            user-select: none;
+            -webkit-user-select: none;
+        }
+        #gameCanvas {
+            display: block;
+        }
+    </style>
+</head>
+<body>
+
+    <canvas id="gameCanvas"></canvas>
+
+    <script>
+        /**
+         * --- 先生用設定エリア ---
+         */
+        const CONFIG = {
+            gameTitle: "ALGEBRA SHOOTER",
+            subTitle: "KAIJU BUSTERS",
+            fontMain: "'DotGothic16', sans-serif",
+            fontPixel: "'Press Start 2P', cursive",
+            baseTimeLimit: 60,
+            levelUpScore: 500,
+            stageScoreInterval: 1500,
+            bonusInterval: 2000,    
+            bonusDuration: 300,     
+            coreMaxHP: 100,         
+            maxHealth: 5,
+            bonusPoint: 100,
+            shipSpeed: 10,
+            decoyStartLevel: 3,
+            stages: [
+                { name: "DEEP SPACE", bgColor: "#00030a", nebulaColor: "rgba(10, 20, 50, 0.4)", starColor: "#fff", enemyHue: 200 },
+                { name: "PURPLE NEBULA", bgColor: "#0a0015", nebulaColor: "rgba(80, 0, 120, 0.3)", starColor: "#f0f", enemyHue: 280 },
+                { name: "INFERNO SECTOR", bgColor: "#100000", nebulaColor: "rgba(150, 30, 0, 0.25)", starColor: "#f50", enemyHue: 0 },
+                { name: "EMERALD VOID", bgColor: "#000a05", nebulaColor: "rgba(0, 100, 50, 0.2)", starColor: "#0f8", enemyHue: 120 },
+                { name: "BEYOND THE EDGE", bgColor: "#000", nebulaColor: "rgba(50, 50, 50, 0.2)", starColor: "#fff", enemyHue: 40 }
+            ],
+            starLayers: [
+                { count: 150, speed: 0.3, size: 1 }, 
+                { count: 80, speed: 1.2, size: 1.5 },  
+                { count: 30, speed: 5.0, size: 2.5 }   
+            ],
+            kaijuPixels: [
+                [0,0,0,1,1,0,0,1,1,0,0,0],
+                [0,0,1,1,1,1,1,1,1,1,0,0],
+                [0,1,1,0,0,1,1,0,0,1,1,0],
+                [1,1,1,1,1,1,1,1,1,1,1,1],
+                [1,1,0,1,1,0,0,1,1,0,1,1],
+                [1,1,1,1,1,1,1,1,1,1,1,1],
+                [0,1,1,1,1,1,1,1,1,1,1,0],
+                [0,0,1,1,1,0,0,1,1,1,0,0],
+                [0,1,1,0,1,1,1,1,0,1,1,0],
+                [1,1,0,0,1,1,1,1,0,0,1,1],
+                [1,0,0,0,1,0,0,1,0,0,0,1],
+                [1,1,0,1,1,0,0,1,1,0,1,1]
+            ],
+            enemyPixels: [
+                [
+                    [0,0,1,0,0,1,0,0], [0,0,0,1,1,0,0,0], [0,1,1,1,1,1,1,0], [1,1,0,1,1,0,1,1],
+                    [1,1,1,1,1,1,1,1], [0,1,0,1,1,0,1,0], [0,1,0,0,0,0,1,0], [1,0,1,0,0,1,0,1]
+                ],
+                [
+                    [0,0,0,1,1,0,0,0], [0,1,1,1,1,1,1,0], [1,1,1,1,1,1,1,1], [1,1,0,1,1,0,1,1],
+                    [1,1,1,1,1,1,1,1], [0,0,1,0,0,1,0,0], [0,1,0,1,1,0,1,0], [1,0,1,0,0,1,0,1]
+                ]
+            ]
+        };
+
+        const canvas = document.getElementById('gameCanvas');
+        const ctx = canvas.getContext('2d');
+        
+        let gameState = 'MODE_SELECT';
+        let controlMode = '';         
+        let score = 0;
+        let level = 1;
+        let stageIdx = 0;
+        let timeLeft = CONFIG.baseTimeLimit;
+        let health = 3;
+        let frameCount = 0;
+        let shakeTimer = 0;
+
+        let isBgmEnabled = true; 
+        let isWaitingForStageStart = false;
+        let bonusTimer = 0;
+        let lastBonusScore = 0;
+        let coreHP = 0;
+        let isCoreDestroyed = false;
+
+        let problem = {};
+        let enemies = [];
+        let decoys = []; 
+        let bullets = [];
+        let particles = [];
+        
+        let playerX = 400;  
+        let playerY = 520;
+        let prevPlayerX = 400; // 慣性アニメーション用
+        let playerVx = 0;      // 慣性アニメーション用
+
+        let stars = [];
+        let nebulas = [];
+
+        const keys = {};
+        const baseW = 800;
+        const baseH = 600;
+        let scale = 1;
+
+        // --- オーディオ管理 ---
+        const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        let bgmInterval = null;
+        let currentBgmMode = 'NORMAL'; 
+
+        function playSound(freq, type = 'sine', duration = 0.1, vol = 0.05, delay = 0) {
+            try {
+                const now = audioCtx.currentTime + delay;
+                const osc = audioCtx.createOscillator();
+                const gain = audioCtx.createGain();
+                osc.type = type;
+                osc.frequency.setValueAtTime(freq, now);
+                gain.gain.setValueAtTime(vol, now);
+                gain.gain.exponentialRampToValueAtTime(0.001, now + duration);
+                osc.connect(gain);
+                gain.connect(audioCtx.destination);
+                osc.start(now);
+                osc.stop(now + duration);
+            } catch(e) {}
+        }
+
+        function playCorrectSound() {
+            const freqs = [1046.50, 1318.51, 1567.98, 2093.00]; 
+            freqs.forEach((f, i) => playSound(f, 'sine', 0.2, 0.04, i * 0.04));
+        }
+
+        function playBonusHitSound() {
+            playSound(200 + Math.random() * 400, 'square', 0.05, 0.01);
+        }
+
+        function playDestroySound() {
+            playSound(100, 'sawtooth', 1.0, 0.15);
+            playSound(60, 'square', 0.8, 0.1);
+        }
+
+        function playGameOverSound() {
+            const freqs = [330, 261, 196, 164]; 
+            freqs.forEach((f, i) => playSound(f, 'sawtooth', 0.5, 0.04, i * 0.15));
+        }
+
+        const NORMAL_BGM = [
+            {f: 65.41, d: 0.2, t: 0.0}, {f: 65.41, d: 0.2, t: 0.25},
+            {f: 98.00, d: 0.2, t: 0.5}, {f: 98.00, d: 0.2, t: 0.75},
+            {f: 116.54, d: 0.2, t: 1.0}, {f: 116.54, d: 0.2, t: 1.25},
+            {f: 87.31, d: 0.2, t: 1.5}, {f: 87.31, d: 0.2, t: 1.75},
+            {f: 261.63, d: 0.4, t: 0.0, type:'square', vol:0.02},
+            {f: 311.13, d: 0.4, t: 0.5, type:'square', vol:0.02},
+            {f: 392.00, d: 0.4, t: 1.0, type:'square', vol:0.02},
+            {f: 466.16, d: 0.4, t: 1.5, type:'square', vol:0.02}
+        ];
+
+        const BONUS_BGM = [
+            {f: 130.81, d: 0.1, t: 0.0}, {f: 130.81, d: 0.1, t: 0.125},
+            {f: 155.56, d: 0.1, t: 0.25}, {f: 155.56, d: 0.1, t: 0.375},
+            {f: 130.81, d: 0.1, t: 0.5}, {f: 130.81, d: 0.1, t: 0.625},
+            {f: 174.61, d: 0.1, t: 0.75}, {f: 174.61, d: 0.1, t: 0.875},
+            {f: 523.25, d: 0.2, t: 0.0, type:'square', vol:0.025},
+            {f: 622.25, d: 0.2, t: 0.25, type:'square', vol:0.025},
+            {f: 523.25, d: 0.2, t: 0.5, type:'square', vol:0.025},
+            {f: 698.46, d: 0.2, t: 0.75, type:'square', vol:0.025}
+        ];
+
+        function startBGM(mode = 'NORMAL') {
+            if (!isBgmEnabled) return;
+            stopBGM(); 
+            currentBgmMode = mode;
+            const data = (mode === 'BONUS') ? BONUS_BGM : NORMAL_BGM;
+            const loopTime = (mode === 'BONUS') ? 1.0 : 2.0;
+            const playLoop = () => {
+                const startTime = audioCtx.currentTime + 0.1;
+                data.forEach(n => {
+                    playSound(n.f, n.type || 'triangle', n.d, n.vol || 0.03, n.t + (startTime - audioCtx.currentTime));
+                });
+            };
+            playLoop();
+            bgmInterval = setInterval(playLoop, loopTime * 1000);
+        }
+
+        function stopBGM() {
+            if (bgmInterval) {
+                clearInterval(bgmInterval);
+                bgmInterval = null;
+            }
+        }
+
+        function generateProblem() {
+            let type = (level <= 4) ? level - 1 : Math.floor(Math.random() * 4);
+            let x, a, b, text;
+            switch(type) {
+                case 0: x = Math.floor(Math.random()*15)+1; a = Math.floor(Math.random()*15)+1; b = x+a; text=`x + ${a} = ${b}`; break;
+                case 1: x = Math.floor(Math.random()*15)+10; a = Math.floor(Math.random()*(x-1))+1; b = x-a; text=`x - ${a} = ${b}`; break;
+                case 2: x = Math.floor(Math.random()*8)+2; a = Math.floor(Math.random()*8)+2; b = a*x; text=`${a} × x = ${b}`; break;
+                case 3: a = Math.floor(Math.random()*5)+2; b = Math.floor(Math.random()*8)+2; x = a*b; text=`x ÷ ${a} = ${b}`; break;
+            }
+            problem = { ans: x, text: text };
+            spawnEnemies();
+        }
+
+        function spawnEnemies() {
+            enemies = [];
+            if (bonusTimer > 0) return;
+            const correctAns = problem.ans;
+            const options = [correctAns];
+            while (options.length < 4) {
+                let dummy = correctAns + (Math.floor(Math.random()*21)-10);
+                if (dummy < 1 || options.includes(dummy)) dummy = correctAns + Math.floor(Math.random()*20)+1;
+                if (!options.includes(dummy)) options.push(dummy);
+            }
+            options.sort(() => Math.random() - 0.5);
+            const speedBase = 0.8 + (level * 0.2) + (stageIdx * 0.3);
+            options.forEach((val, i) => {
+                enemies.push({
+                    x: 150 + (i * 165), y: -100,
+                    val: val, isCorrect: val === correctAns,
+                    speed: speedBase + (Math.random() * 0.4),
+                    phase: Math.random() * Math.PI * 2,
+                    pattern: Math.floor(Math.random() * CONFIG.enemyPixels.length),
+                    scale: 0,
+                    scaleVel: 0 // スプリングアニメーション用
+                });
+            });
+        }
+
+        function spawnDecoy() {
+            if (bonusTimer > 0 || level < CONFIG.decoyStartLevel) return;
+            const chance = 0.008 + (stageIdx * 0.006);
+            if (Math.random() < chance) {
+                const numToSpawn = 1 + Math.floor(Math.random() * (1 + Math.floor(stageIdx / 2)));
+                for (let i = 0; i < numToSpawn; i++) {
+                    decoys.push({
+                        x: Math.random() * baseW,
+                        y: -50 - (Math.random() * 100), 
+                        size: 10 + Math.random() * 15,
+                        speed: 2 + Math.random() * 4 + (stageIdx * 0.6),
+                        rot: 0,
+                        rotSpeed: (Math.random() - 0.5) * 0.2
+                    });
+                }
+            }
+        }
+
+        function initBackground() {
+            stars = [];
+            const starColors = ["#ffffff", "#00ffff", "#ff00ff", "#ffff00", "#aaaaff"];
+            CONFIG.starLayers.forEach(layer => {
+                for (let i = 0; i < layer.count; i++) {
+                    stars.push({ 
+                        x: Math.random() * baseW, y: Math.random() * baseH, s: layer.size, speed: layer.speed,
+                        layerIdx: CONFIG.starLayers.indexOf(layer), color: starColors[Math.floor(Math.random() * starColors.length)],
+                        twinkle: Math.random() * Math.PI * 2, twinkleSpeed: 0.02 + Math.random() * 0.05
+                    });
+                }
+            });
+            nebulas = [];
+            for (let i = 0; i < 3; i++) {
+                nebulas.push({
+                    x: Math.random() * baseW, y: Math.random() * baseH,
+                    size: 200 + Math.random() * 300, speed: 0.05 + Math.random() * 0.1
+                });
+            }
+        }
+        initBackground();
+
+        // 物理ベースのパーティクル生成
+        function createExplosion(x, y, color, count = 20) {
+            for (let i = 0; i < count; i++) {
+                const angle = Math.random() * Math.PI * 2;
+                const speed = Math.random() * 12 + 2;
+                particles.push({ 
+                    x, y, 
+                    vx: Math.cos(angle) * speed, 
+                    vy: Math.sin(angle) * speed, 
+                    life: 40 + Math.random() * 30, 
+                    maxLife: 70,
+                    size: 3 + Math.random() * 5, 
+                    color: color 
+                });
+            }
+        }
+
+        function resize() {
+            const sw = window.innerWidth, sh = window.innerHeight;
+            scale = Math.min(sw / baseW, sh / baseH);
+            canvas.width = baseW * scale;
+            canvas.height = baseH * scale;
+        }
+        window.addEventListener('resize', resize);
+        resize();
+
+        function handleInteraction(e) {
+            e.preventDefault();
+            window.focus();
+            if (audioCtx.state === 'suspended') audioCtx.resume();
+            const rect = canvas.getBoundingClientRect();
+            const touch = e.changedTouches ? e.changedTouches[0] : e;
+            const tx = (touch.clientX - rect.left) / scale;
+            const ty = (touch.clientY - rect.top) / scale;
+
+            if (gameState === 'MODE_SELECT') {
+                if (ty > 310 && ty < 380) {
+                    if (tx > 110 && tx < 370) { controlMode = 'TOUCH'; gameState = 'START'; playSound(880); startBGM('NORMAL'); }
+                    else if (tx > 430 && tx < 690) { controlMode = 'KEYBOARD'; gameState = 'START'; playSound(880); startBGM('NORMAL'); }
+                }
+                if (ty > 410 && ty < 460 && tx > 300 && tx < 500) {
+                    isBgmEnabled = !isBgmEnabled;
+                    playSound(isBgmEnabled ? 660 : 440);
+                }
+                if (ty > 480 && ty < 530 && tx > 300 && tx < 500) {
+                    gameState = 'HOW_TO_PLAY';
+                    playSound(880);
+                }
+                return;
+            }
+            
+            if (gameState === 'HOW_TO_PLAY') {
+                const boxY = 40, boxH = baseH - 80;
+                // 調整されたボタンのヒットボックス
+                if (ty > boxY + boxH - 75 && ty < boxY + boxH - 25 && tx > baseW/2 - 100 && tx < baseW/2 + 100) {
+                    gameState = 'MODE_SELECT';
+                    playSound(440);
+                }
+                return;
+            }
+
+            if (gameState === 'START' || gameState === 'RESULT') { resetGame(); return; }
+            if (gameState === 'PLAY') {
+                if (isWaitingForStageStart) { isWaitingForStageStart = false; playSound(880, 'sine', 0.2); }
+                else { playerX = tx; fire(); }
+            }
+        }
+
+        function fire() {
+            if (bonusTimer > 0) {
+                if (!isCoreDestroyed) {
+                    bullets.push({ x: playerX - 35, y: playerY - 10 });
+                    bullets.push({ x: playerX - 15, y: playerY - 30 });
+                    bullets.push({ x: playerX, y: playerY - 45 });
+                    bullets.push({ x: playerX + 15, y: playerY - 30 });
+                    bullets.push({ x: playerX + 35, y: playerY - 10 });
+                    playSound(1600, 'square', 0.04, 0.01);
+                }
+            } else {
+                bullets.push({ x: playerX, y: playerY - 30 }); 
+                playSound(1400, 'square', 0.07, 0.02);
+            }
+        }
+
+        canvas.addEventListener('touchstart', handleInteraction, { passive: false });
+        canvas.addEventListener('mousedown', handleInteraction);
+        canvas.addEventListener('touchmove', (e) => {
+            if (gameState !== 'PLAY' || controlMode === 'KEYBOARD' || isWaitingForStageStart) return;
+            const rect = canvas.getBoundingClientRect();
+            playerX = (e.touches[0].clientX - rect.left) / scale;
+        }, { passive: false });
+
+        window.addEventListener('keydown', (e) => {
+            keys[e.code] = true;
+            if (gameState === 'MODE_SELECT') {
+                if (e.code === 'ArrowLeft') { controlMode = 'TOUCH'; gameState = 'START'; playSound(880); startBGM('NORMAL'); }
+                if (e.code === 'ArrowRight') { controlMode = 'KEYBOARD'; gameState = 'START'; playSound(880); startBGM('NORMAL'); }
+                return;
+            }
+            if (e.code === 'Space') {
+                if (gameState === 'PLAY') {
+                    if (isWaitingForStageStart) { isWaitingForStageStart = false; playSound(880, 'sine', 0.2); }
+                    else fire();
+                } else if (gameState === 'START' || gameState === 'RESULT') resetGame();
+                e.preventDefault();
+            }
+            if (['ArrowLeft', 'ArrowRight'].includes(e.code)) e.preventDefault();
+        });
+        window.addEventListener('keyup', (e) => { keys[e.code] = false; });
+
+        function resetGame() {
+            score = 0; level = 1; stageIdx = 0; timeLeft = CONFIG.baseTimeLimit; health = 3;
+            enemies = []; decoys = []; bullets = []; particles = [];
+            bonusTimer = 0; lastBonusScore = 0; isWaitingForStageStart = false;
+            playerX = 400; prevPlayerX = 400; playerVx = 0;
+            generateProblem();
+            gameState = 'PLAY';
+            startBGM('NORMAL');
+        }
+
+        function drawShip(x, y) {
+            ctx.save();
+            ctx.translate(x, y);
+            
+            // 慣性による機体の傾き（バンキング）アニメーション
+            ctx.rotate(playerVx * 0.02);
+            ctx.scale(0.55, 0.55); 
+            
+            const flicker = Math.random() * 20;
+            const engColor = bonusTimer > 0 ? '#ffaa00' : '#00ffff';
+            
+            // エンジンフレア
+            [-12, 12].forEach(posX => {
+                const grad = ctx.createRadialGradient(posX, 30, 0, posX, 30, 20 + flicker);
+                grad.addColorStop(0, '#ffffff'); 
+                grad.addColorStop(0.4, engColor); 
+                grad.addColorStop(1, 'transparent');
+                ctx.fillStyle = grad;
+                ctx.beginPath(); 
+                ctx.moveTo(posX - 6, 30); 
+                ctx.lineTo(posX, 60 + flicker); 
+                ctx.lineTo(posX + 6, 30); 
+                ctx.fill();
+            });
+            
+            // 機体描画
+            const hullGrad = ctx.createLinearGradient(-15, 0, 15, 0);
+            hullGrad.addColorStop(0, '#778'); hullGrad.addColorStop(0.5, '#fff'); hullGrad.addColorStop(1, '#aaa');
+            ctx.fillStyle = hullGrad; ctx.strokeStyle = '#004'; ctx.lineWidth = 1.5;
+            ctx.beginPath(); ctx.moveTo(0, -50); ctx.lineTo(-12, 10); ctx.lineTo(-20, 35); ctx.lineTo(0, 25); ctx.lineTo(20, 35); ctx.lineTo(12, 10); ctx.closePath(); ctx.fill(); ctx.stroke();
+            ctx.fillStyle = '#f22'; ctx.beginPath(); ctx.moveTo(-10, 5); ctx.lineTo(-35, 30); ctx.lineTo(-10, 25); ctx.fill();
+            ctx.beginPath(); ctx.moveTo(10, 5); ctx.lineTo(35, 30); ctx.lineTo(10, 25); ctx.fill();
+            const canopyGrad = ctx.createLinearGradient(0, -15, 0, 0);
+            canopyGrad.addColorStop(0, bonusTimer > 0 ? '#ff0' : '#0ff'); canopyGrad.addColorStop(1, '#006');
+            ctx.fillStyle = canopyGrad; ctx.beginPath(); ctx.ellipse(0, -10, 6, 12, 0, 0, Math.PI*2); ctx.fill();
+            
+            ctx.restore();
+        }
+
+        function drawPixelEnemy(e) {
+            ctx.save();
+            ctx.translate(e.x, e.y);
+            const bounce = Math.sin(frameCount * 0.1 + e.phase) * 8;
+            ctx.translate(0, bounce);
+            
+            // スプリングアニメーションでスケールを更新
+            e.scaleVel += (1 - e.scale) * 0.15; // バネ定数
+            e.scaleVel *= 0.8; // 減衰
+            e.scale += e.scaleVel;
+            
+            const pixelSize = 8 * Math.max(0, e.scale);
+            const hue = CONFIG.stages[stageIdx % CONFIG.stages.length].enemyHue;
+            const map = CONFIG.enemyPixels[e.pattern];
+            
+            ctx.shadowBlur = 15; ctx.shadowColor = `hsl(${hue}, 100%, 50%)`;
+            const legOffset = (frameCount % 40 < 20) ? 0 : 1;
+            
+            map.forEach((row, y) => {
+                row.forEach((pixel, x) => {
+                    if (pixel) {
+                        let drawY = y;
+                        if (y >= 6 && legOffset) drawY += (x % 2 === 0 ? 0.2 : -0.2);
+                        ctx.fillStyle = `hsl(${hue}, 100%, ${60 - y * 3}%)`;
+                        if (y === 3 && (x === 2 || x === 5)) ctx.fillStyle = "#fff";
+                        ctx.fillRect((x - 4) * pixelSize, (drawY - 4) * pixelSize, pixelSize - 0.5, pixelSize - 0.5);
+                    }
+                });
+            });
+            
+            ctx.shadowBlur = 0; ctx.textAlign = "center";
+            ctx.fillStyle = "rgba(0, 0, 0, 0.5)"; ctx.beginPath(); ctx.roundRect(-25, -15, 50, 35, 5); ctx.fill();
+            ctx.font = `bold 28px ${CONFIG.fontMain}`; 
+            ctx.strokeStyle = "#000"; ctx.lineWidth = 4;
+            ctx.strokeText(e.val, 0, 15); ctx.fillStyle = "#fff"; ctx.fillText(e.val, 0, 15);
+            ctx.restore();
+        }
+
+        function drawGiantKaiju() {
+            if (isCoreDestroyed) return;
+            const centerX = baseW / 2;
+            const centerY = 220;
+            const pixelSize = 22; 
+            ctx.save();
+            ctx.translate(centerX, centerY);
+            
+            if (shakeTimer > 0) ctx.translate((Math.random()-0.5)*15, (Math.random()-0.5)*15);
+            
+            // 動的なオーラエフェクト
+            const auraTime = frameCount * 0.05;
+            const pulseRadius = 220 + Math.sin(auraTime) * 20;
+            const auraGrad = ctx.createRadialGradient(0, 0, pulseRadius * 0.4, 0, 0, pulseRadius);
+            
+            if (coreHP < 30) {
+                auraGrad.addColorStop(0, "rgba(255, 0, 0, 0.6)");
+                auraGrad.addColorStop(1, "transparent");
+            } else {
+                const r = Math.floor(100 + Math.sin(auraTime)*50);
+                auraGrad.addColorStop(0, `rgba(${r}, 255, 255, 0.3)`);
+                auraGrad.addColorStop(1, "transparent");
+            }
+            
+            ctx.fillStyle = auraGrad; ctx.beginPath(); ctx.arc(0, 0, pulseRadius, 0, Math.PI*2); ctx.fill();
+            
+            const map = CONFIG.kaijuPixels;
+            const mapW = map[0].length;
+            const mapH = map.length;
+            const isFlashing = (shakeTimer > 0 && frameCount % 4 < 2);
+            
+            map.forEach((row, y) => {
+                row.forEach((pixel, x) => {
+                    if (pixel) {
+                        if (isFlashing) {
+                            ctx.fillStyle = "#fff"; // ダメージ時は強烈な白フラッシュ
+                            ctx.shadowBlur = 20; ctx.shadowColor = "#fff";
+                        } else {
+                            ctx.shadowBlur = 0;
+                            const hpFactor = coreHP / CONFIG.coreMaxHP;
+                            const r = Math.floor(255 * (1 - hpFactor));
+                            const g = Math.floor(255 * hpFactor);
+                            const b = Math.floor(255 * hpFactor);
+                            ctx.fillStyle = `rgb(${r}, ${g}, ${b})`;
+                            if (y === 4 && (x === 2 || x === 5 || x === 9)) ctx.fillStyle = (frameCount % 10 < 5) ? "#ff0" : "#fff";
+                            if (y === 0) ctx.fillStyle = "#666";
+                        }
+                        ctx.fillRect((x - mapW/2) * pixelSize, (y - mapH/2) * pixelSize, pixelSize - 1, pixelSize - 1);
+                    }
+                });
+            });
+            ctx.restore();
+        }
+
+        function drawAsteroid(d) {
+            ctx.save();
+            ctx.translate(d.x, d.y); ctx.rotate(d.rot); ctx.fillStyle = '#543'; ctx.beginPath();
+            for(let i=0; i<7; i++) { const r = d.size * (0.8 + Math.random()*0.4); const a = (i/7) * Math.PI*2; ctx.lineTo(Math.cos(a)*r, Math.sin(a)*r); }
+            ctx.closePath(); ctx.fill(); ctx.restore();
+        }
+
+        function drawScanlines() {
+            // アーケードモニター風のスキャンラインを描画
+            ctx.fillStyle = "rgba(0, 0, 0, 0.15)";
+            for(let i=0; i<baseH; i+=4) {
+                ctx.fillRect(0, i, baseW, 2);
+            }
+        }
+
+        function update() {
+            frameCount++;
+            const currentStage = CONFIG.stages[stageIdx % CONFIG.stages.length];
+            ctx.save();
+            const sAmt = isCoreDestroyed && bonusTimer > 280 ? 40 : 15;
+            if (shakeTimer > 0) { ctx.translate((Math.random()-0.5)*sAmt, (Math.random()-0.5)*sAmt); shakeTimer--; }
+            ctx.scale(scale, scale);
+            ctx.fillStyle = (bonusTimer > 0 && gameState === 'PLAY') ? (isCoreDestroyed ? "#111" : "#001") : currentStage.bgColor; 
+            ctx.fillRect(0, 0, baseW, baseH);
+
+            if (bonusTimer === 0 || gameState !== 'PLAY') {
+                nebulas.forEach(n => {
+                    n.y += n.speed; if (n.y > baseH + n.size) { n.y = -n.size; n.x = Math.random() * baseW; }
+                    const nGrad = ctx.createRadialGradient(n.x, n.y, 0, n.x, n.y, n.size);
+                    nGrad.addColorStop(0, currentStage.nebulaColor); nGrad.addColorStop(1, "transparent");
+                    ctx.fillStyle = nGrad; ctx.beginPath(); ctx.arc(n.x, n.y, n.size, 0, Math.PI*2); ctx.fill();
+                });
+            }
+            
+            // 星の描画（軌跡・スピードライン風に強化）
+            stars.forEach(s => {
+                const isHyperDrive = (gameState === 'PLAY' && bonusTimer > 0 && !isWaitingForStageStart);
+                const moveMult = (gameState === 'PLAY' && !isWaitingForStageStart) ? (isHyperDrive ? 25 : 1) : 0.1;
+                s.y += s.speed * moveMult; 
+                if (s.y > baseH) s.y = 0;
+                
+                s.twinkle += s.twinkleSpeed; 
+                const twinkleAlpha = 0.4 + Math.sin(s.twinkle) * 0.6;
+                ctx.globalAlpha = (s.layerIdx === 0 ? 0.3 : (s.layerIdx === 1 ? 0.6 : 1.0)) * twinkleAlpha;
+                ctx.strokeStyle = s.color;
+                ctx.lineWidth = s.s;
+                ctx.lineCap = "round";
+                
+                ctx.beginPath();
+                ctx.moveTo(s.x, s.y);
+                // 加速時は長い線を描く
+                const trailLength = isHyperDrive ? (s.speed * moveMult * 1.5) : (s.s * 2);
+                ctx.lineTo(s.x, s.y - trailLength);
+                ctx.stroke();
+            });
+            ctx.globalAlpha = 1.0;
+
+            if (gameState === 'MODE_SELECT') {
+                drawModeSelect();
+            } else if (gameState === 'HOW_TO_PLAY') {
+                drawHowToPlay();
+            } else if (gameState === 'PLAY') {
+                updatePlay();
+                if (isWaitingForStageStart) {
+                    ctx.save(); ctx.fillStyle = "rgba(0, 0, 0, 0.7)"; ctx.fillRect(0, 0, baseW, baseH);
+                    ctx.textAlign = "center"; 
+                    ctx.fillStyle = "#fff"; ctx.font = `italic bold 60px ${CONFIG.fontMain}`;
+                    ctx.shadowBlur = 20; ctx.shadowColor = "#0ff";
+                    ctx.fillText(`STAGE ${stageIdx + 1}`, baseW/2, baseH/2 - 20);
+                    ctx.font = `bold 30px ${CONFIG.fontMain}`; ctx.fillStyle = "#0ff"; 
+                    ctx.fillText(currentStage.name, baseW/2, baseH/2 + 30);
+                    const flash = Math.sin(frameCount * 0.1) * 0.5 + 0.5; ctx.globalAlpha = flash;
+                    ctx.fillStyle = "#ff0"; ctx.font = `bold 16px ${CONFIG.fontPixel}`;
+                    const startText = controlMode === 'TOUCH' ? "TAP TO START" : "PRESS SPACE TO START";
+                    ctx.fillText(startText, baseW/2, baseH/2 + 100); ctx.restore();
+                }
+            } else if (gameState === 'START') {
+                drawOverlay("MISSION READY", controlMode === 'TOUCH' ? "なぞって移動" : "矢印キーで移動", "START MISSION");
+            } else if (gameState === 'RESULT') {
+                drawOverlay("MISSION FAILED", `SCORE: ${score}`, "RETRY");
+            }
+
+            // パーティクル（爆発）の物理ベース更新と描画
+            particles.forEach((p, i) => {
+                p.vx *= 0.92; // 摩擦で減速
+                p.vy *= 0.92;
+                p.x += p.vx; 
+                p.y += p.vy; 
+                p.life--; 
+                if (p.life <= 0) {
+                    particles.splice(i, 1);
+                } else {
+                    const lifeRatio = p.life / p.maxLife;
+                    ctx.fillStyle = p.color; 
+                    ctx.globalAlpha = lifeRatio; 
+                    // 時間経過で縮小
+                    const currentSize = Math.max(0.1, p.size * lifeRatio);
+                    ctx.beginPath();
+                    ctx.arc(p.x, p.y, currentSize, 0, Math.PI * 2);
+                    ctx.fill();
+                }
+            });
+            ctx.globalAlpha = 1.0; 
+
+            // スキャンライン描画でアーケード感を演出
+            drawScanlines();
+
+            ctx.restore();
+            requestAnimationFrame(update);
+        }
+
+        function drawModeSelect() {
+            ctx.save(); 
+            ctx.textAlign = "center"; 
+            ctx.shadowBlur = 20; ctx.shadowColor = "#0ff";
+            ctx.fillStyle = "#fff"; 
+            ctx.font = `bold 36px ${CONFIG.fontPixel}`;
+            ctx.fillText(CONFIG.gameTitle, baseW/2, 140);
+            ctx.shadowBlur = 15; ctx.shadowColor = "#f0f";
+            ctx.fillStyle = "#f0f"; 
+            ctx.font = `bold 18px ${CONFIG.fontPixel}`;
+            ctx.fillText(CONFIG.subTitle, baseW/2, 200);
+            ctx.shadowBlur = 0;
+            
+            // 明滅するテキスト
+            ctx.fillStyle = `rgba(0, 255, 255, ${0.7 + Math.sin(frameCount * 0.05) * 0.3})`;
+            ctx.font = `bold 20px ${CONFIG.fontMain}`;
+            ctx.fillText("操作モードを選択してください", baseW/2, 270);
+            
+            const btnW = 260, btnH = 70;
+            const btnColor = "rgba(0, 255, 255, 0.15)";
+            const strokeColor = "#0ff";
+            
+            ctx.fillStyle = btnColor; ctx.strokeStyle = strokeColor; ctx.lineWidth = 2;
+            ctx.beginPath(); ctx.roundRect(110, 310, btnW, btnH, 10); ctx.fill(); ctx.stroke();
+            ctx.fillStyle = "#fff"; ctx.font = `bold 18px ${CONFIG.fontMain}`; ctx.fillText("TOUCH / MOUSE", 240, 355);
+            
+            ctx.fillStyle = btnColor; ctx.strokeStyle = strokeColor;
+            ctx.beginPath(); ctx.roundRect(430, 310, btnW, btnH, 10); ctx.fill(); ctx.stroke();
+            ctx.fillStyle = "#fff"; ctx.font = `bold 18px ${CONFIG.fontMain}`; ctx.fillText("KEYBOARD", 560, 355);
+
+            ctx.fillStyle = isBgmEnabled ? "rgba(0, 255, 0, 0.2)" : "rgba(255, 0, 0, 0.2)";
+            ctx.strokeStyle = isBgmEnabled ? "#0f0" : "#f00";
+            ctx.beginPath(); ctx.roundRect(300, 410, 200, 50, 10); ctx.fill(); ctx.stroke();
+            ctx.fillStyle = "#fff"; ctx.font = `bold 16px ${CONFIG.fontMain}`;
+            ctx.fillText(isBgmEnabled ? "BGM: ON" : "BGM: OFF", baseW/2, 442);
+
+            ctx.fillStyle = "rgba(255, 255, 255, 0.1)";
+            ctx.strokeStyle = "#fff";
+            ctx.beginPath(); ctx.roundRect(300, 480, 200, 50, 10); ctx.fill(); ctx.stroke();
+            ctx.fillStyle = "#fff"; ctx.font = `bold 16px ${CONFIG.fontMain}`;
+            ctx.fillText("HOW TO PLAY", baseW/2, 512);
+            
+            ctx.restore();
+        }
+
+        function drawHowToPlay() {
+            ctx.save();
+            // 枠のサイズと描画
+            const boxX = 60, boxY = 40, boxW = baseW - 120, boxH = baseH - 80;
+            
+            // 半透明の背景とグリッドパターンでサイバー感を出す
+            ctx.fillStyle = "rgba(0, 5, 20, 0.95)";
+            ctx.fillRect(boxX, boxY, boxW, boxH);
+            
+            ctx.strokeStyle = "rgba(0, 255, 255, 0.1)";
+            ctx.lineWidth = 1;
+            for(let i=0; i<boxW; i+=20) { ctx.beginPath(); ctx.moveTo(boxX+i, boxY); ctx.lineTo(boxX+i, boxY+boxH); ctx.stroke(); }
+            for(let i=0; i<boxH; i+=20) { ctx.beginPath(); ctx.moveTo(boxX, boxY+i); ctx.lineTo(boxX+boxW, boxY+i); ctx.stroke(); }
+
+            // 外枠を光らせる
+            ctx.shadowBlur = 15; ctx.shadowColor = "#0ff";
+            ctx.strokeStyle = "#0ff"; ctx.lineWidth = 3;
+            ctx.strokeRect(boxX, boxY, boxW, boxH);
+            ctx.shadowBlur = 0;
+
+            ctx.textAlign = "center";
+            ctx.fillStyle = "#0ff";
+            ctx.font = `bold 24px ${CONFIG.fontPixel}`;
+            ctx.fillText("HOW TO PLAY", baseW/2, boxY + 60);
+
+            ctx.textAlign = "left";
+            ctx.font = `bold 16px ${CONFIG.fontMain}`;
+            ctx.fillStyle = "#fff";
+            let ly = boxY + 120;
+            const lines = [
+                "■ 操作方法",
+                "  ・TOUCH : 画面をなぞって移動＆発射",
+                "  ・KEYBOARD : 矢印キーで移動、スペースで発射",
+                "",
+                "■ ルール",
+                "  1. 画面上の式を解いて 'x' の値を求める",
+                "  2. 正解のエイリアンを撃ち抜くとスコア加算",
+                "  3. 隕石(いんせき)に当たるとシールドが減少",
+                "  4. スコアを稼ぐと巨大怪獣(カイジュウ)が出現！",
+                "     弱点を連射してビッグボーナスを獲得せよ！"
+            ];
+            lines.forEach(l => {
+                ctx.fillText(l, boxX + 40, ly);
+                ly += 30;
+            });
+
+            // BACK ボタン（枠線の下に被らないように位置を微調整）
+            ctx.textAlign = "center";
+            ctx.fillStyle = "rgba(255, 255, 255, 0.15)";
+            ctx.strokeStyle = "#fff";
+            ctx.lineWidth = 2;
+            const btnY = boxY + boxH - 75; // 枠の下端(boxY+boxH)より十分に上
+            ctx.beginPath(); ctx.roundRect(baseW/2 - 100, btnY, 200, 50, 10); ctx.fill(); ctx.stroke();
+            ctx.fillStyle = "#fff";
+            ctx.font = `bold 18px ${CONFIG.fontMain}`;
+            ctx.fillText("BACK", baseW/2, btnY + 32);
+
+            ctx.restore();
+        }
+
+        function updatePlay() {
+            if (isWaitingForStageStart) { drawShip(playerX, playerY); return; }
+            
+            // プレイヤー座標の更新と慣性の計算
+            prevPlayerX = playerX;
+            if (controlMode === 'KEYBOARD') {
+                if (keys.ArrowLeft) playerX -= CONFIG.shipSpeed; if (keys.ArrowRight) playerX += CONFIG.shipSpeed;
+            }
+            if (playerX < 40) playerX = 40; if (playerX > baseW - 40) playerX = baseW - 40;
+            
+            // アニメーション用：速度の平滑化
+            playerVx = (playerX - prevPlayerX) * 0.4 + playerVx * 0.6;
+            
+            timeLeft -= 1/60; 
+            if (timeLeft <= 0 || health <= 0) {
+                gameState = 'RESULT';
+                playGameOverSound();
+                stopBGM();
+            }
+
+            if (score >= level * CONFIG.levelUpScore) {
+                level++; timeLeft += 5; playSound(660, 'sine', 0.5, 0.1);
+            }
+            const nextStageIdx = Math.floor(score / CONFIG.stageScoreInterval);
+            if (nextStageIdx > stageIdx) {
+                stageIdx = nextStageIdx; isWaitingForStageStart = true;
+                playSound(440, 'sine', 0.6, 0.1); playSound(880, 'sine', 0.6, 0.1, 0.1); return;
+            }
+
+            if (score >= lastBonusScore + CONFIG.bonusInterval && bonusTimer === 0) {
+                bonusTimer = CONFIG.bonusDuration;
+                lastBonusScore = (Math.floor(score / CONFIG.bonusInterval)) * CONFIG.bonusInterval;
+                coreHP = CONFIG.coreMaxHP; isCoreDestroyed = false; enemies = []; decoys = [];
+                playSound(330, 'square', 0.5, 0.1);
+                startBGM('BONUS'); 
+            }
+
+            if (bonusTimer > 0) { 
+                bonusTimer--; 
+                drawGiantKaiju(); 
+                if (bonusTimer === 0) { 
+                    health = Math.min(CONFIG.maxHealth, health + 2); 
+                    generateProblem(); 
+                    startBGM('NORMAL'); 
+                } 
+            }
+            else spawnDecoy();
+
+            const hudColor = bonusTimer > 0 ? "#ff0" : `hsl(${180 + level * 20}, 100%, 50%)`;
+            ctx.fillStyle = hudColor; 
+            ctx.font = `14px ${CONFIG.fontPixel}`; 
+            ctx.textAlign = "left"; 
+            ctx.shadowBlur = 10; ctx.shadowColor = hudColor;
+            ctx.fillText(`SCORE: ${score.toString().padStart(7, '0')}`, 25, 40); 
+            ctx.font = `bold 22px ${CONFIG.fontMain}`;
+            ctx.textAlign = "center"; 
+            ctx.fillText(bonusTimer > 0 ? (isCoreDestroyed ? "KAIJU DESTROYED!!" : "HYPER DRIVE!!") : `STAGE: ${stageIdx + 1} - LVL: ${level}`, baseW/2, 40);
+            ctx.font = `14px ${CONFIG.fontPixel}`; 
+            ctx.textAlign = "right"; 
+            ctx.fillText(`SHIELD: ${health}`, baseW - 25, 40);
+            ctx.shadowBlur = 0;
+
+            if (bonusTimer === 0) {
+                ctx.save(); ctx.fillStyle = "rgba(0, 15, 35, 0.85)"; ctx.strokeStyle = hudColor;
+                ctx.lineWidth = 2;
+                ctx.beginPath(); ctx.roundRect(220, 50, 360, 50, 8); ctx.fill(); ctx.stroke();
+                ctx.fillStyle = "#fff"; 
+                ctx.font = `bold 28px ${CONFIG.fontMain}`; 
+                ctx.textAlign = "center";
+                ctx.shadowBlur = 5; ctx.shadowColor = "#fff";
+                ctx.fillText(problem.text, baseW/2, 85); ctx.restore();
+            }
+
+            // 洗練された弾（レーザー）の描画
+            bullets.forEach((b, bi) => {
+                b.y -= 30; // 弾速を少しアップして爽快感向上
+                const isBonus = bonusTimer > 0;
+                ctx.shadowBlur = 15; 
+                ctx.shadowColor = isBonus ? "#ffaa00" : "#00ffff";
+                ctx.fillStyle = "#fff";
+                
+                // レーザー風の鋭い形状
+                ctx.beginPath();
+                ctx.moveTo(b.x, b.y - 15);
+                ctx.lineTo(b.x + (isBonus?4:3), b.y);
+                ctx.lineTo(b.x, b.y + 25);
+                ctx.lineTo(b.x - (isBonus?4:3), b.y);
+                ctx.closePath();
+                ctx.fill();
+                ctx.shadowBlur = 0;
+
+                if (bonusTimer > 0 && !isCoreDestroyed) {
+                    const dist = Math.hypot(b.x - baseW/2, b.y - 220);
+                    if (dist < 130) {
+                        bullets.splice(bi, 1); coreHP--; score += 5; shakeTimer = 3;
+                        createExplosion(b.x, b.y - 15, "#ff0", 3); playBonusHitSound();
+                        if (coreHP <= 0) { 
+                            isCoreDestroyed = true; score += 500; shakeTimer = 40; playDestroySound(); 
+                            // 大爆発を連続パーティクルで表現
+                            for(let i=0; i<5; i++) {
+                                setTimeout(() => {
+                                    createExplosion(baseW/2 + (Math.random()-0.5)*150, 220 + (Math.random()-0.5)*150, "#fff", 50);
+                                    createExplosion(baseW/2 + (Math.random()-0.5)*150, 220 + (Math.random()-0.5)*150, "#ffaa00", 50);
+                                }, i * 100);
+                            }
+                        }
+                    }
+                }
+                if (b.y < -50) bullets.splice(bi, 1);
+            });
+
+            decoys.forEach((d, di) => {
+                d.y += d.speed; d.rot += d.rotSpeed; drawAsteroid(d);
+                if (Math.abs(d.x - playerX) < 25 && Math.abs(d.y - playerY) < 30) {
+                    health--; shakeTimer = 10; createExplosion(d.x, d.y, "#ff4400", 20);
+                    playSound(100, 'square', 0.2, 0.1); decoys.splice(di, 1);
+                }
+                bullets.forEach((b, bi) => { 
+                    if (Math.abs(b.x - d.x) < d.size + 5 && Math.abs(b.y - d.y) < d.size + 5) { 
+                        bullets.splice(bi, 1); createExplosion(d.x, d.y, "#888", 15); decoys.splice(di, 1); 
+                    } 
+                });
+                if (d.y > baseH + 50) decoys.splice(di, 1);
+            });
+
+            enemies.forEach((e, ei) => {
+                e.y += e.speed; 
+                drawPixelEnemy(e); 
+                bullets.forEach((b, bi) => {
+                    if (Math.abs(b.x - e.x) < 40 && Math.abs(b.y - e.y) < 30) {
+                        bullets.splice(bi, 1);
+                        if (e.isCorrect) { 
+                            score += CONFIG.bonusPoint; 
+                            createExplosion(e.x, e.y, `hsl(${CONFIG.stages[stageIdx % CONFIG.stages.length].enemyHue}, 100%, 70%)`, 50); 
+                            playCorrectSound(); generateProblem(); 
+                        } else { 
+                            health--; shakeTimer = 15; 
+                            createExplosion(e.x, e.y, "#ff0044", 25); 
+                            playSound(150, 'square', 0.3, 0.08); enemies.splice(ei, 1); 
+                        }
+                    }
+                });
+                if (e.y > baseH + 60) {
+                    if (e.isCorrect) { health--; generateProblem(); }
+                    else { enemies.splice(ei, 1); if(enemies.length===0) generateProblem(); }
+                }
+            });
+            drawShip(playerX, playerY);
+        }
+
+        function drawOverlay(t1, t2, t3) {
+            ctx.fillStyle = "rgba(0, 1, 10, 0.92)"; ctx.fillRect(0, 0, baseW, baseH);
+            ctx.textAlign = "center"; const floatY = Math.sin(frameCount * 0.05) * 8;
+            ctx.shadowBlur = 20; ctx.shadowColor = (t1.includes("FAILED") ? "#f00" : "#0ff");
+            ctx.font = `bold 50px ${CONFIG.fontMain}`; ctx.fillStyle = "#fff"; ctx.fillText(t1, baseW/2, 250 + floatY);
+            ctx.shadowBlur = 0;
+            ctx.font = `22px ${CONFIG.fontMain}`; ctx.fillStyle = "#0af"; ctx.fillText(t2, baseW/2, 310 + floatY);
+            const flash = (frameCount % 60 < 30) ? "#f22" : "rgba(255, 30, 30, 0.3)";
+            ctx.font = `bold 16px ${CONFIG.fontPixel}`; ctx.fillStyle = flash;
+            ctx.fillText(t3, baseW/2, 450);
+        }
+        
+        requestAnimationFrame(update);
+    </script>
+</body>
+</html>
